@@ -9,7 +9,7 @@ interface SearchPanelProps {
   onNavigate: () => void;
 }
 
-// 日本主要城市坐标数据库
+// 扩展的日本地点数据库（包含景点和地标）
 const JAPAN_LOCATIONS: Record<string, { lng: number; lat: number }> = {
   '東京': { lng: 139.7671, lat: 35.6812 },
   '东京': { lng: 139.7671, lat: 35.6812 },
@@ -64,19 +64,46 @@ const JAPAN_LOCATIONS: Record<string, { lng: number; lat: number }> = {
   'スカイツリー': { lng: 139.8107, lat: 35.7101 },
   '天空树': { lng: 139.8107, lat: 35.7101 },
   'skytree': { lng: 139.8107, lat: 35.7101 },
+  // 大阪景点
+  'usj': { lng: 135.4326, lat: 34.6654 },
+  '环球影城': { lng: 135.4326, lat: 34.6654 },
+  '大阪usj': { lng: 135.4326, lat: 34.6654 },
+  'universal studios japan': { lng: 135.4326, lat: 34.6654 },
+  '道顿堀': { lng: 135.5020, lat: 34.6686 },
+  'dotonbori': { lng: 135.5020, lat: 34.6686 },
+  '大阪城': { lng: 135.5258, lat: 34.6873 },
+  'osaka castle': { lng: 135.5258, lat: 34.6873 },
+  '心斋桥': { lng: 135.4998, lat: 34.6718 },
+  'shinsaibashi': { lng: 135.4998, lat: 34.6718 },
+  // 京都景点
+  '清水寺': { lng: 135.7850, lat: 34.9949 },
+  'kiyomizu': { lng: 135.7850, lat: 34.9949 },
+  '金閣寺': { lng: 135.7292, lat: 35.0394 },
+  '金阁寺': { lng: 135.7292, lat: 35.0394 },
+  'kinkakuji': { lng: 135.7292, lat: 35.0394 },
+  '伏見稲荷': { lng: 135.7727, lat: 34.9671 },
+  'fushimi inari': { lng: 135.7727, lat: 34.9671 },
+  // 其他热门景点
+  '迪士尼': { lng: 139.8811, lat: 35.6329 },
+  'disneyland': { lng: 139.8811, lat: 35.6329 },
+  'disney': { lng: 139.8811, lat: 35.6329 },
+  '镰仓': { lng: 139.5503, lat: 35.3192 },
+  'kamakura': { lng: 139.5503, lat: 35.3192 },
+  '箱根': { lng: 139.0286, lat: 35.2322 },
+  'hakone': { lng: 139.0286, lat: 35.2322 },
 };
 
 const SearchPanel = ({ onSearch, onNavigate }: SearchPanelProps) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [isNavigating, setIsNavigating] = useState(false);
 
-  const handleSearch = () => {
+  const handleSearch = async () => {
     if (!searchTerm.trim()) {
       toast.error('请输入地点名称');
       return;
     }
 
-    // 搜索匹配的地点（不区分大小写）
+    // 首先尝试本地数据库
     const searchKey = searchTerm.toLowerCase().trim();
     const location = JAPAN_LOCATIONS[searchKey];
 
@@ -86,18 +113,41 @@ const SearchPanel = ({ onSearch, onNavigate }: SearchPanelProps) => {
         name: searchTerm,
       });
       toast.success(`找到地点: ${searchTerm}`);
-    } else {
-      // 提供搜索建议
-      const suggestions = Object.keys(JAPAN_LOCATIONS)
-        .filter(key => key.includes(searchKey))
-        .slice(0, 3)
-        .join(', ');
-      
-      if (suggestions) {
-        toast.error(`未找到"${searchTerm}"，您是否要搜索: ${suggestions}？`);
+      return;
+    }
+
+    // 如果本地没有，使用Nominatim API进行地理编码搜索
+    toast.loading('正在搜索地点...');
+    try {
+      const response = await fetch(
+        `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchTerm)}&limit=1&accept-language=zh-CN,en`
+      );
+      const data = await response.json();
+
+      if (data && data.length > 0) {
+        const result = data[0];
+        onSearch({
+          lng: parseFloat(result.lon),
+          lat: parseFloat(result.lat),
+          name: result.display_name,
+        });
+        toast.success(`找到地点: ${result.display_name}`);
       } else {
-        toast.error(`未找到"${searchTerm}"，请尝试输入日本的主要城市或景点名称`);
+        // 提供搜索建议
+        const suggestions = Object.keys(JAPAN_LOCATIONS)
+          .filter(key => key.includes(searchKey))
+          .slice(0, 3)
+          .join(', ');
+        
+        if (suggestions) {
+          toast.error(`未找到"${searchTerm}"，您是否要搜索: ${suggestions}？`);
+        } else {
+          toast.error(`未找到"${searchTerm}"，请尝试输入更具体的地点名称`);
+        }
       }
+    } catch (error) {
+      console.error('地点搜索失败:', error);
+      toast.error('搜索失败，请检查网络连接或尝试其他地点名称');
     }
   };
 
@@ -126,12 +176,15 @@ const SearchPanel = ({ onSearch, onNavigate }: SearchPanelProps) => {
           <div className="flex gap-2">
             <Input
               type="text"
-              placeholder="输入地点名称（如：東京、大阪、渋谷）"
+              placeholder="输入地点名称（例如：東京、大阪usj、环球影城）"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               onKeyPress={handleKeyPress}
-              className="flex-1 h-12 text-base bg-input border-border text-foreground placeholder:text-muted-foreground"
-              style={{ color: '#000000' }}
+              className="flex-1 h-12 text-base border-2 border-primary/30 focus:border-primary placeholder:text-muted-foreground"
+              style={{ 
+                backgroundColor: '#ffffff',
+                color: '#000000'
+              }}
             />
             <Button
               onClick={handleSearch}

@@ -24,12 +24,12 @@ const Map3D = ({
   const routeMarker = useRef<maplibregl.Marker | null>(null);
   const userMarker = useRef<maplibregl.Marker | null>(null);
 
-  // 地图样式URL（使用免费的MapLibre演示样式，完全兼容且支持3D）
+  // 地图样式URL（使用OpenStreetMap详细地图）
   const getMapStyleUrl = () => {
     const styles: Record<string, string> = {
-      default: 'https://demotiles.maplibre.org/style.json',
-      satellite: 'https://demotiles.maplibre.org/style.json',
-      terrain: 'https://demotiles.maplibre.org/style.json',
+      default: 'https://tiles.openfreemap.org/styles/liberty',
+      satellite: 'https://tiles.openfreemap.org/styles/satellite',
+      terrain: 'https://tiles.openfreemap.org/styles/liberty',
     };
     return styles[mapStyle] || styles.default;
   };
@@ -37,13 +37,13 @@ const Map3D = ({
   useEffect(() => {
     if (!mapContainer.current) return;
 
-    // 初始化地图（日本东京为中心）
+    // 初始化地图（世界地图视角）
     map.current = new maplibregl.Map({
       container: mapContainer.current,
       style: getMapStyleUrl(),
-      center: [139.7671, 35.6812], // 东京中心
-      zoom: 13,
-      pitch: 60, // 3D倾斜角度
+      center: [0, 20], // 世界地图中心
+      zoom: 2,
+      pitch: 0,
       bearing: 0,
     });
 
@@ -117,7 +117,7 @@ const Map3D = ({
     try {
       // 安全检查：确保样式已加载
       const style = map.current.getStyle();
-      if (!style || !style.layers) {
+      if (!style || !style.layers || !style.sources) {
         console.warn('地图样式尚未完全加载');
         return;
       }
@@ -127,49 +127,62 @@ const Map3D = ({
         return;
       }
 
-      // 查找标签图层
+      // 查找建筑数据源和图层
+      const sources = style.sources;
+      let buildingSourceId = '';
+      let buildingSourceLayer = '';
+
+      // 寻找包含建筑数据的源
+      if (sources['openmaptiles']) {
+        buildingSourceId = 'openmaptiles';
+        buildingSourceLayer = 'building';
+      } else if (sources['protomaps']) {
+        buildingSourceId = 'protomaps';
+        buildingSourceLayer = 'buildings';
+      }
+
+      if (!buildingSourceId) {
+        console.warn('当前地图样式不包含建筑数据源');
+        return;
+      }
+
+      // 查找标签图层（3D建筑应该在标签下方）
       const layers = style.layers;
       const labelLayerId = layers.find(
-        (layer) => layer.type === 'symbol' && layer.layout && layer.layout['text-field']
+        (layer) => layer.type === 'symbol' && layer.layout && 'text-field' in layer.layout
       )?.id;
 
       // 添加3D建筑物图层
       map.current.addLayer(
         {
           id: '3d-buildings',
-          source: 'openmaptiles',
-          'source-layer': 'building',
-          filter: ['==', 'extrude', 'true'],
+          source: buildingSourceId,
+          'source-layer': buildingSourceLayer,
+          filter: ['has', 'height'],
           type: 'fill-extrusion',
-          minzoom: 15,
+          minzoom: 14,
           paint: {
-            'fill-extrusion-color': '#aaa',
-            'fill-extrusion-height': [
+            'fill-extrusion-color': [
               'interpolate',
               ['linear'],
-              ['zoom'],
-              15,
-              0,
-              15.05,
               ['get', 'height'],
+              0, '#e0e0e0',
+              50, '#d0d0d0',
+              100, '#c0c0c0',
+              200, '#a0a0a0',
             ],
-            'fill-extrusion-base': [
-              'interpolate',
-              ['linear'],
-              ['zoom'],
-              15,
-              0,
-              15.05,
-              ['get', 'min_height'],
-            ],
-            'fill-extrusion-opacity': 0.6,
+            'fill-extrusion-height': ['get', 'height'],
+            'fill-extrusion-base': ['coalesce', ['get', 'min_height'], 0],
+            'fill-extrusion-opacity': 0.8,
           },
         },
         labelLayerId
       );
+      
+      console.log('3D建筑物图层已添加');
+      toast.success('3D建筑已启用');
     } catch (error) {
       console.error('添加3D建筑物失败:', error);
-      toast.error('3D建筑功能暂时不可用');
     }
   };
 
@@ -241,62 +254,118 @@ const Map3D = ({
     toast.success(`已定位到: ${searchLocation.name}`);
   }, [searchLocation]);
 
-  // 开始导航
+  // 开始导航（使用OSRM API获取真实路线）
   useEffect(() => {
     if (!map.current || !startNavigation || !searchLocation) return;
 
     const start = userLocation || { lng: 139.7671, lat: 35.6812 };
     const end = { lng: searchLocation.lng, lat: searchLocation.lat };
 
-    // 绘制简单的直线路径（实际应用中应该调用路线规划API）
-    const routeGeoJSON: GeoJSON.Feature<GeoJSON.LineString> = {
-      type: 'Feature',
-      properties: {},
-      geometry: {
-        type: 'LineString',
-        coordinates: [
-          [start.lng, start.lat],
-          [end.lng, end.lat],
-        ],
-      },
+    // 调用OSRM路线规划API
+    const fetchRoute = async () => {
+      try {
+        const url = `https://router.project-osrm.org/route/v1/driving/${start.lng},${start.lat};${end.lng},${end.lat}?overview=full&geometries=geojson`;
+        const response = await fetch(url);
+        const data = await response.json();
+
+        if (data.code === 'Ok' && data.routes && data.routes.length > 0) {
+          const route = data.routes[0];
+          const routeGeoJSON: GeoJSON.Feature<GeoJSON.LineString> = {
+            type: 'Feature',
+            properties: {
+              distance: route.distance,
+              duration: route.duration,
+            },
+            geometry: route.geometry,
+          };
+
+          // 添加路线图层
+          if (map.current!.getSource('route')) {
+            (map.current!.getSource('route') as maplibregl.GeoJSONSource).setData(routeGeoJSON);
+          } else {
+            map.current!.addSource('route', {
+              type: 'geojson',
+              data: routeGeoJSON,
+            });
+
+            map.current!.addLayer({
+              id: 'route',
+              type: 'line',
+              source: 'route',
+              layout: {
+                'line-join': 'round',
+                'line-cap': 'round',
+              },
+              paint: {
+                'line-color': '#0088ff',
+                'line-width': 8,
+                'line-opacity': 0.8,
+              },
+            });
+          }
+
+          // 调整视图以显示完整路径
+          const coordinates = route.geometry.coordinates;
+          const bounds = new maplibregl.LngLatBounds();
+          coordinates.forEach((coord: [number, number]) => {
+            bounds.extend(coord);
+          });
+
+          map.current!.fitBounds(bounds, {
+            padding: 100,
+            pitch: 45,
+          });
+
+          const distanceKm = (route.distance / 1000).toFixed(1);
+          const durationMin = Math.round(route.duration / 60);
+          toast.success(`导航路线已规划：${distanceKm}公里，约${durationMin}分钟`);
+        } else {
+          throw new Error('无法获取路线');
+        }
+      } catch (error) {
+        console.error('路线规划失败:', error);
+        toast.error('路线规划失败，将显示直线路径');
+        
+        // 降级方案：显示直线
+        const routeGeoJSON: GeoJSON.Feature<GeoJSON.LineString> = {
+          type: 'Feature',
+          properties: {},
+          geometry: {
+            type: 'LineString',
+            coordinates: [
+              [start.lng, start.lat],
+              [end.lng, end.lat],
+            ],
+          },
+        };
+
+        if (map.current!.getSource('route')) {
+          (map.current!.getSource('route') as maplibregl.GeoJSONSource).setData(routeGeoJSON);
+        } else {
+          map.current!.addSource('route', {
+            type: 'geojson',
+            data: routeGeoJSON,
+          });
+
+          map.current!.addLayer({
+            id: 'route',
+            type: 'line',
+            source: 'route',
+            layout: {
+              'line-join': 'round',
+              'line-cap': 'round',
+            },
+            paint: {
+              'line-color': '#0088ff',
+              'line-width': 8,
+              'line-opacity': 0.8,
+            },
+          });
+        }
+      }
     };
 
-    // 添加路线图层
-    if (map.current.getSource('route')) {
-      (map.current.getSource('route') as maplibregl.GeoJSONSource).setData(routeGeoJSON);
-    } else {
-      map.current.addSource('route', {
-        type: 'geojson',
-        data: routeGeoJSON,
-      });
-
-      map.current.addLayer({
-        id: 'route',
-        type: 'line',
-        source: 'route',
-        layout: {
-          'line-join': 'round',
-          'line-cap': 'round',
-        },
-        paint: {
-          'line-color': '#00ffff',
-          'line-width': 6,
-          'line-opacity': 0.8,
-        },
-      });
-    }
-
-    // 调整视图以显示完整路径
-    const bounds = new maplibregl.LngLatBounds();
-    bounds.extend([start.lng, start.lat]);
-    bounds.extend([end.lng, end.lat]);
-
-    map.current.fitBounds(bounds, {
-      padding: 100,
-      pitch: 45,
-    });
-
-    toast.success('导航路线已规划');
+    fetchRoute();
   }, [startNavigation, searchLocation, userLocation]);
 
   return (
