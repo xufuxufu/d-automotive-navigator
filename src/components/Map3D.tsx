@@ -24,12 +24,12 @@ const Map3D = ({
   const routeMarker = useRef<maplibregl.Marker | null>(null);
   const userMarker = useRef<maplibregl.Marker | null>(null);
 
-  // 地图样式URL（使用免费的OpenStreetMap风格）
+  // 地图样式URL（使用免费的MapLibre演示样式，完全兼容且支持3D）
   const getMapStyleUrl = () => {
     const styles: Record<string, string> = {
-      default: 'https://tile.openstreetmap.jp/styles/osm-bright-ja/style.json',
-      satellite: 'https://tile.openstreetmap.jp/styles/osm-bright-ja/style.json',
-      terrain: 'https://tile.openstreetmap.jp/styles/osm-bright-ja/style.json',
+      default: 'https://demotiles.maplibre.org/style.json',
+      satellite: 'https://demotiles.maplibre.org/style.json',
+      terrain: 'https://demotiles.maplibre.org/style.json',
     };
     return styles[mapStyle] || styles.default;
   };
@@ -63,10 +63,12 @@ const Map3D = ({
     map.current.on('load', () => {
       if (!map.current) return;
 
-      // 添加3D建筑物图层
-      if (show3DBuildings) {
-        add3DBuildings();
-      }
+      // 延迟添加3D建筑物图层，确保样式完全加载
+      setTimeout(() => {
+        if (show3DBuildings && map.current) {
+          add3DBuildings();
+        }
+      }, 500);
 
       // 获取用户位置
       if (navigator.geolocation) {
@@ -112,66 +114,102 @@ const Map3D = ({
   const add3DBuildings = () => {
     if (!map.current) return;
 
-    // 添加3D建筑物图层
-    const layers = map.current.getStyle().layers;
-    const labelLayerId = layers.find(
-      (layer) => layer.type === 'symbol' && layer.layout && layer.layout['text-field']
-    )?.id;
+    try {
+      // 安全检查：确保样式已加载
+      const style = map.current.getStyle();
+      if (!style || !style.layers) {
+        console.warn('地图样式尚未完全加载');
+        return;
+      }
 
-    map.current.addLayer(
-      {
-        id: '3d-buildings',
-        source: 'openmaptiles',
-        'source-layer': 'building',
-        filter: ['==', 'extrude', 'true'],
-        type: 'fill-extrusion',
-        minzoom: 15,
-        paint: {
-          'fill-extrusion-color': '#aaa',
-          'fill-extrusion-height': [
-            'interpolate',
-            ['linear'],
-            ['zoom'],
-            15,
-            0,
-            15.05,
-            ['get', 'height'],
-          ],
-          'fill-extrusion-base': [
-            'interpolate',
-            ['linear'],
-            ['zoom'],
-            15,
-            0,
-            15.05,
-            ['get', 'min_height'],
-          ],
-          'fill-extrusion-opacity': 0.6,
+      // 检查是否已存在3D建筑图层
+      if (map.current.getLayer('3d-buildings')) {
+        return;
+      }
+
+      // 查找标签图层
+      const layers = style.layers;
+      const labelLayerId = layers.find(
+        (layer) => layer.type === 'symbol' && layer.layout && layer.layout['text-field']
+      )?.id;
+
+      // 添加3D建筑物图层
+      map.current.addLayer(
+        {
+          id: '3d-buildings',
+          source: 'openmaptiles',
+          'source-layer': 'building',
+          filter: ['==', 'extrude', 'true'],
+          type: 'fill-extrusion',
+          minzoom: 15,
+          paint: {
+            'fill-extrusion-color': '#aaa',
+            'fill-extrusion-height': [
+              'interpolate',
+              ['linear'],
+              ['zoom'],
+              15,
+              0,
+              15.05,
+              ['get', 'height'],
+            ],
+            'fill-extrusion-base': [
+              'interpolate',
+              ['linear'],
+              ['zoom'],
+              15,
+              0,
+              15.05,
+              ['get', 'min_height'],
+            ],
+            'fill-extrusion-opacity': 0.6,
+          },
         },
-      },
-      labelLayerId
-    );
+        labelLayerId
+      );
+    } catch (error) {
+      console.error('添加3D建筑物失败:', error);
+      toast.error('3D建筑功能暂时不可用');
+    }
   };
 
   // 切换3D建筑物显示
   useEffect(() => {
-    if (!map.current) return;
+    if (!map.current || !map.current.isStyleLoaded()) return;
 
-    if (map.current.getLayer('3d-buildings')) {
-      map.current.setLayoutProperty(
-        '3d-buildings',
-        'visibility',
-        show3DBuildings ? 'visible' : 'none'
-      );
-    } else if (show3DBuildings) {
-      add3DBuildings();
+    try {
+      if (map.current.getLayer('3d-buildings')) {
+        map.current.setLayoutProperty(
+          '3d-buildings',
+          'visibility',
+          show3DBuildings ? 'visible' : 'none'
+        );
+      } else if (show3DBuildings) {
+        add3DBuildings();
+      }
+    } catch (error) {
+      console.error('切换3D建筑显示失败:', error);
     }
   }, [show3DBuildings]);
 
   // 切换地图样式
   useEffect(() => {
     if (!map.current) return;
-    map.current.setStyle(getMapStyleUrl());
+    
+    try {
+      map.current.setStyle(getMapStyleUrl());
+      
+      // 样式切换后需要重新添加3D建筑
+      map.current.once('styledata', () => {
+        if (show3DBuildings && map.current) {
+          setTimeout(() => {
+            add3DBuildings();
+          }, 500);
+        }
+      });
+    } catch (error) {
+      console.error('切换地图样式失败:', error);
+    }
   }, [mapStyle]);
 
   // 搜索位置标记
