@@ -30,8 +30,8 @@ const LayerSwitcher = ({ onStyleChange, on3DBuildingsToggle }: LayerSwitcherProp
   };
 
   return (
-    <div className="absolute bottom-4 left-4 z-10">
-      <div className="bg-card rounded-lg shadow-strong p-4 space-y-3">
+    <div className="absolute bottom-4 left-4 z-[100] pointer-events-auto">
+      <div className="bg-card rounded-lg shadow-strong p-4 space-y-3 pointer-events-auto">
         {/* 地图样式切换 */}
         <div className="space-y-2">
           <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
